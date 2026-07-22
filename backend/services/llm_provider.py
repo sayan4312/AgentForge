@@ -25,52 +25,47 @@ def _get_openrouter_key():
     return os.getenv("OPENROUTER_API_KEY", "").strip()
 
 
-REQUEST_STATS = {
-    "gemini": 0,
-    "openrouter": 0,
-    "start_time": time.time()
-}
+GEMINI_CALL_COUNT = 0
 
 def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] = None) -> str:
+    global GEMINI_CALL_COUNT
     client = _get_gemini_client()
     if not client:
         raise RuntimeError("Gemini API key not configured")
 
-    REQUEST_STATS["gemini"] += 1
-    call_num = REQUEST_STATS["gemini"]
-    elapsed = round(time.time() - REQUEST_STATS["start_time"], 2)
-    key_preview = os.getenv("GEMINI_API_KEY", "")[:10]
-    print(f"\n🔥 [GEMINI DEBUG REQUEST #{call_num}] (Elapsed: {elapsed}s | Key: {key_preview}...)")
-    print(f"   Prompt Snippet: {contents[:80].strip()}...")
+    GEMINI_CALL_COUNT += 1
+    call_id = GEMINI_CALL_COUNT
+    current_time = time.strftime("%H:%M:%S")
+    prompt_summary = contents[:55].strip().replace("\n", " ")
+    print(f"\n⚡ [GEMINI API REQUEST #{call_id}] at {current_time} | Prompt: '{prompt_summary}...'")
 
     model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
     last_err = None
 
     for model_name in model_list:
         try:
-            print(f"   --> Attempting Gemini Model: '{model_name}'...")
             kwargs: Dict[str, Any] = {"model": model_name, "contents": contents}
             if config is not None:
                 kwargs["config"] = config
             response = client.models.generate_content(**kwargs)
-            res_text = (response.text or "").strip()
-            print(f"   ✅ [SUCCESS] Gemini '{model_name}' returned {len(res_text)} chars.")
-            return res_text
+            print(f"   --> Request #{call_id} [{model_name}] -> ✅ 200 SUCCESS")
+            return (response.text or "").strip()
         except Exception as exc:
             last_err = exc
             err_str = str(exc)
-            print(f"   ❌ [FAILED] Gemini Model '{model_name}': {err_str[:150]}")
-            if "401" in err_str or "UNAUTHENTICATED" in err_str or "INVALID_ARGUMENT" in err_str:
-                print(f"   [WARN] Auth error. Trying OpenRouter fallback.")
-                break
-            if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "504", "OVERLOADED"]):
-                print(f"   [INFO] Gemini '{model_name}' rate-limited/busy. Trying next model...")
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                print(f"   --> Request #{call_id} [{model_name}] -> ❌ 429 RATE LIMIT EXCEEDED")
                 time.sleep(1.0)
                 continue
-            if any(k in err_str for k in ["404", "NOT_FOUND"]):
-                print(f"   [INFO] Gemini '{model_name}' not found. Trying next model...")
+            elif "401" in err_str or "UNAUTHENTICATED" in err_str or "INVALID_ARGUMENT" in err_str:
+                print(f"   --> Request #{call_id} [{model_name}] -> ❌ 401 INVALID AUTH KEY")
+                break
+            elif "404" in err_str or "NOT_FOUND" in err_str:
+                print(f"   --> Request #{call_id} [{model_name}] -> ❌ 404 MODEL NOT FOUND")
                 continue
-            break
+            else:
+                print(f"   --> Request #{call_id} [{model_name}] -> ❌ ERROR: {err_str[:100]}")
+                break
 
     if last_err:
         raise last_err
@@ -81,11 +76,6 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
     key = _get_openrouter_key()
     if not key:
         raise RuntimeError("OpenRouter API key not configured")
-
-    REQUEST_STATS["openrouter"] += 1
-    call_num = REQUEST_STATS["openrouter"]
-    elapsed = round(time.time() - REQUEST_STATS["start_time"], 2)
-    print(f"\n🌐 [OPENROUTER DEBUG REQUEST #{call_num}] (Elapsed: {elapsed}s)")
 
     default_free_models = [
         "qwen/qwen-2.5-coder-32b-instruct:free",
@@ -99,7 +89,6 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
         if not m:
             continue
         try:
-            print(f"   --> Attempting OpenRouter Model: '{m}'...")
             payload: Dict[str, Any] = {
                 "model": m,
                 "messages": [
@@ -123,17 +112,17 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
             )
             if response.status_code == 200:
                 data = response.json()
-                res_text = data["choices"][0]["message"]["content"].strip()
-                print(f"   ✅ [SUCCESS] OpenRouter '{m}' returned {len(res_text)} chars.")
-                return res_text
+                return data["choices"][0]["message"]["content"].strip()
             else:
                 err_msg = f"HTTP {response.status_code}: {response.text[:100]}"
-                print(f"   ❌ [FAILED] OpenRouter '{m}': {err_msg}")
                 last_err = RuntimeError(f"OpenRouter {err_msg}")
         except Exception as exc:
             last_err = exc
-            print(f"   ❌ [FAILED] OpenRouter '{m}': {exc}")
             continue
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("All OpenRouter model fallbacks failed")
 
     if last_err:
         raise last_err
