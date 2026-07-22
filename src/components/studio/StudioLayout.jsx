@@ -78,39 +78,8 @@ export default function StudioLayout({ prompt, initialFiles = null, onSaveAgent,
     };
   }, [isResizingVertical]);
 
-  useEffect(() => {
-    fetchQuestionnaire();
-  }, []);
+  // Initial Architect Chat greeting is handled cleanly by AIEngineerPanel
 
-  const fetchQuestionnaire = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/architect/interview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt || "Custom AI Agent" })
-      });
-      const data = await res.json();
-      const qData = data.result || data.interview;
-      if (qData) {
-        setQuestionnaireData(qData);
-        if (qData.initial_architecture) {
-          setArchitecture(qData.initial_architecture);
-        }
-        if (qData.architect_greeting) {
-          setArchitectChatMessages((prev) => {
-            if (prev.length > 0) return prev;
-            return [{ id: 1, sender: 'architect', text: qData.architect_greeting }];
-          });
-        }
-      }
-    } catch (e) {
-      console.warn("Could not load backend questionnaire:", e);
-      setArchitectChatMessages((prev) => {
-        if (prev.length > 0) return prev;
-        return [{ id: 1, sender: 'architect', text: `Hello! I am your Senior AI Architect. Let's design your agent for "${prompt || 'Custom AI Agent'}". What key features do you need?` }];
-      });
-    }
-  };
 
   const handleUpdateAnswer = (questionId, value) => {
     setQuestionnaireAnswers((prev) => ({
