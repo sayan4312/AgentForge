@@ -14,13 +14,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def _get_gemini_client():
-    key = os.getenv("GEMINI_API_KEY", "")
+    load_dotenv(override=True)
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     if key:
         return genai.Client(api_key=key)
     return None
 
 def _get_openrouter_key():
-    return os.getenv("OPENROUTER_API_KEY", "")
+    load_dotenv(override=True)
+    return os.getenv("OPENROUTER_API_KEY", "").strip()
 
 
 def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] = None) -> str:
@@ -28,7 +30,7 @@ def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] 
     if not client:
         raise RuntimeError("Gemini API key not configured")
 
-    model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
+    model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest", "gemini-1.5-pro-latest"]
     last_err = None
 
     for model_name in model_list:
@@ -63,17 +65,12 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
     if not key:
         raise RuntimeError("OpenRouter API key not configured")
 
-    default_free_models = [
+    models_to_try = [model] if model else [
         "google/gemini-2.0-flash-lite-001",
+        "meta-llama/llama-3.2-1b-instruct:free",
         "deepseek/deepseek-r1:free",
-        "qwen/qwen-2.5-coder-32b-instruct:free",
-        "mistralai/mistral-7b-instruct:free"
+        "qwen/qwen-2.5-coder-32b-instruct:free"
     ]
-
-    if model:
-        models_to_try = [model] + [m for m in default_free_models if m != model]
-    else:
-        models_to_try = default_free_models
 
     last_err = None
     for m in models_to_try:
@@ -113,7 +110,6 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
     if last_err:
         raise last_err
     raise RuntimeError("All OpenRouter model fallbacks failed")
-
 
 
 def _normalize_text(text: str) -> str:
