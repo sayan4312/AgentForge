@@ -25,33 +25,50 @@ def _get_openrouter_key():
     return os.getenv("OPENROUTER_API_KEY", "").strip()
 
 
+REQUEST_STATS = {
+    "gemini": 0,
+    "openrouter": 0,
+    "start_time": time.time()
+}
+
 def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] = None) -> str:
     client = _get_gemini_client()
     if not client:
         raise RuntimeError("Gemini API key not configured")
+
+    REQUEST_STATS["gemini"] += 1
+    call_num = REQUEST_STATS["gemini"]
+    elapsed = round(time.time() - REQUEST_STATS["start_time"], 2)
+    key_preview = os.getenv("GEMINI_API_KEY", "")[:10]
+    print(f"\n🔥 [GEMINI DEBUG REQUEST #{call_num}] (Elapsed: {elapsed}s | Key: {key_preview}...)")
+    print(f"   Prompt Snippet: {contents[:80].strip()}...")
 
     model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
     last_err = None
 
     for model_name in model_list:
         try:
+            print(f"   --> Attempting Gemini Model: '{model_name}'...")
             kwargs: Dict[str, Any] = {"model": model_name, "contents": contents}
             if config is not None:
                 kwargs["config"] = config
             response = client.models.generate_content(**kwargs)
-            return (response.text or "").strip()
+            res_text = (response.text or "").strip()
+            print(f"   ✅ [SUCCESS] Gemini '{model_name}' returned {len(res_text)} chars.")
+            return res_text
         except Exception as exc:
             last_err = exc
             err_str = str(exc)
+            print(f"   ❌ [FAILED] Gemini Model '{model_name}': {err_str[:150]}")
             if "401" in err_str or "UNAUTHENTICATED" in err_str or "INVALID_ARGUMENT" in err_str:
-                print(f"[WARN] Gemini primary call failed: {err_str[:120]}... Ensure key starts with 'AIzaSy' from aistudio.google.com")
+                print(f"   [WARN] Auth error. Trying OpenRouter fallback.")
                 break
             if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "504", "OVERLOADED"]):
-                print(f"[INFO] Gemini model {model_name} rate-limited/busy ({err_str[:60]}...), trying fallback model...")
+                print(f"   [INFO] Gemini '{model_name}' rate-limited/busy. Trying next model...")
                 time.sleep(1.0)
                 continue
             if any(k in err_str for k in ["404", "NOT_FOUND"]):
-                print(f"[INFO] Gemini model {model_name} not found, trying fallback...")
+                print(f"   [INFO] Gemini '{model_name}' not found. Trying next model...")
                 continue
             break
 
@@ -64,6 +81,11 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
     key = _get_openrouter_key()
     if not key:
         raise RuntimeError("OpenRouter API key not configured")
+
+    REQUEST_STATS["openrouter"] += 1
+    call_num = REQUEST_STATS["openrouter"]
+    elapsed = round(time.time() - REQUEST_STATS["start_time"], 2)
+    print(f"\n🌐 [OPENROUTER DEBUG REQUEST #{call_num}] (Elapsed: {elapsed}s)")
 
     models_to_try = [model] if model else [
         "deepseek/deepseek-r1:free",
