@@ -19,3 +19,7 @@ venv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Databases & Local Vector Cache
+chroma_db/
+backend/chroma_db/

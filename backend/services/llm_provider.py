@@ -9,14 +9,23 @@ import requests
 from google import genai
 
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+from dotenv import load_dotenv
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+load_dotenv()
+
+def _get_gemini_client():
+    key = os.getenv("GEMINI_API_KEY", "")
+    if key:
+        return genai.Client(api_key=key)
+    return None
+
+def _get_openrouter_key():
+    return os.getenv("OPENROUTER_API_KEY", "")
 
 
 def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] = None) -> str:
-    if not gemini_client:
+    client = _get_gemini_client()
+    if not client:
         raise RuntimeError("Gemini API key not configured")
 
     model_list = models or ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
@@ -27,54 +36,79 @@ def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] 
             kwargs: Dict[str, Any] = {"model": model_name, "contents": contents}
             if config is not None:
                 kwargs["config"] = config
-            response = gemini_client.models.generate_content(**kwargs)
+            response = client.models.generate_content(**kwargs)
             return (response.text or "").strip()
         except Exception as exc:
             last_err = exc
             err_str = str(exc)
+            if "401" in err_str or "UNAUTHENTICATED" in err_str:
+                print(f"[WARN] Gemini primary call failed: {err_str[:120]}... Trying OpenRouter fallback.")
+                break
             if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "504", "OVERLOADED"]):
                 print(f"[INFO] Gemini model {model_name} rate-limited/busy ({err_str[:60]}...), trying fallback model...")
-                time.sleep(1.5)
+                time.sleep(1.0)
                 continue
             if any(k in err_str for k in ["404", "NOT_FOUND"]):
                 print(f"[INFO] Gemini model {model_name} not found, trying fallback...")
                 continue
-            raise
+            break
 
     if last_err:
         raise last_err
     raise RuntimeError("All Gemini model fallbacks failed")
 
 
-def _call_openrouter(contents: str, model: str = "openai/gpt-4o-mini", response_format: Optional[Dict[str, Any]] = None) -> str:
-    if not OPENROUTER_API_KEY:
+def _call_openrouter(contents: str, model: Optional[str] = None, response_format: Optional[Dict[str, Any]] = None) -> str:
+    key = _get_openrouter_key()
+    if not key:
         raise RuntimeError("OpenRouter API key not configured")
 
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "user", "content": contents}
-        ],
-        "temperature": 0.2,
-    }
+    models_to_try = [model] if model else [
+        "google/gemini-2.0-flash-lite-001",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-r1:free",
+        "qwen/qwen-2.5-coder-32b-instruct:free",
+        "meta-llama/llama-3.3-70b-instruct"
+    ]
 
-    if response_format:
-        payload["response_format"] = response_format
+    last_err = None
+    for m in models_to_try:
+        if not m:
+            continue
+        try:
+            payload: Dict[str, Any] = {
+                "model": m,
+                "messages": [
+                    {"role": "user", "content": contents}
+                ],
+                "temperature": 0.2,
+            }
+            if response_format:
+                payload["response_format"] = response_format
 
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost:3000"),
-            "X-Title": os.getenv("OPENROUTER_APP_NAME", "AgentForge"),
-        },
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"].strip()
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost:3000"),
+                    "X-Title": os.getenv("OPENROUTER_APP_NAME", "AgentForge"),
+                },
+                json=payload,
+                timeout=20,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data["choices"][0]["message"]["content"].strip()
+            else:
+                last_err = RuntimeError(f"OpenRouter HTTP {response.status_code}: {response.text[:100]}")
+        except Exception as exc:
+            last_err = exc
+            continue
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("All OpenRouter model fallbacks failed")
 
 
 def _normalize_text(text: str) -> str:
@@ -160,7 +194,7 @@ def generate_text_with_fallback(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "openai/gpt-4o-mini",
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct",
 ) -> str:
     """Generate text with Gemini first, then OpenRouter as a fallback."""
     try:
@@ -178,37 +212,22 @@ def generate_text_pro(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "openai/gpt-4o-mini",
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct",
     mode: str = "code",
 ) -> str:
-    """Generate with both Gemini and OpenRouter, then select the strongest output."""
-
-    def call_gemini() -> str:
+    """Fast, responsive LLM provider trying Gemini 2.0 Flash first, falling back to OpenRouter on failure."""
+    if _get_gemini_client():
         try:
-            return _call_gemini(contents, config=config)
+            res = _call_gemini(contents, config=config)
+            if res and res.strip():
+                return res
         except Exception as exc:
-            print(f"[WARN] Gemini pro candidate failed: {exc}")
-            return ""
+            print(f"[WARN] Gemini primary call failed: {exc}")
 
-    def call_openrouter() -> str:
+    if _get_openrouter_key():
         try:
             return _call_openrouter(contents, model=openrouter_model, response_format=response_format)
         except Exception as exc:
-            print(f"[WARN] OpenRouter pro candidate failed: {exc}")
-            return ""
+            print(f"[WARN] OpenRouter fallback failed: {exc}")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        gemini_future = executor.submit(call_gemini)
-        openrouter_future = executor.submit(call_openrouter)
-        gemini_text = gemini_future.result()
-        openrouter_text = openrouter_future.result()
-
-    chosen = _choose_best_candidate([gemini_text, openrouter_text], mode=mode)
-    if chosen:
-        return chosen
-
-    if gemini_text:
-        return _normalize_text(gemini_text)
-    if openrouter_text:
-        return _normalize_text(openrouter_text)
-    raise RuntimeError("No valid candidate returned from Gemini or OpenRouter")
+    raise RuntimeError("No valid output from Gemini or OpenRouter LLM providers")
