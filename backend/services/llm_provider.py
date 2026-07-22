@@ -30,7 +30,7 @@ def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] 
     if not client:
         raise RuntimeError("Gemini API key not configured")
 
-    model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05", "gemini-1.5-flash", "gemini-1.5-pro"]
+    model_list = models or ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
     last_err = None
 
     for model_name in model_list:
@@ -66,10 +66,9 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
         raise RuntimeError("OpenRouter API key not configured")
 
     models_to_try = [model] if model else [
-        "google/gemini-2.0-flash-lite-001",
-        "meta-llama/llama-3.2-1b-instruct:free",
         "deepseek/deepseek-r1:free",
-        "qwen/qwen-2.5-coder-32b-instruct:free"
+        "qwen/qwen-2.5-coder-32b-instruct:free",
+        "meta-llama/llama-3.2-1b-instruct:free"
     ]
 
     last_err = None
@@ -195,7 +194,7 @@ def generate_text_with_fallback(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "google/gemini-2.0-flash-lite-001",
+    openrouter_model: str = "deepseek/deepseek-r1:free",
 ) -> str:
     """Generate text with Gemini first, then OpenRouter as a fallback."""
     try:
@@ -213,7 +212,7 @@ def generate_text_pro(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "google/gemini-2.0-flash-lite-001",
+    openrouter_model: str = "deepseek/deepseek-r1:free",
     mode: str = "code",
 ) -> str:
     """Fast, responsive LLM provider trying Gemini 2.0 Flash first, falling back to OpenRouter on failure."""
