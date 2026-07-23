@@ -63,13 +63,18 @@ def _call_gemini(contents: str, config: Any = None, models: Optional[List[str]] 
 def _call_openrouter(contents: str, model: Optional[str] = None, response_format: Optional[Dict[str, Any]] = None) -> str:
     key = _get_openrouter_key()
     if not key:
-        raise RuntimeError("OpenRouter API key not configured")
+        raise RuntimeError("OpenRouter API key not configured in .env")
 
-    default_free_models = [
+    default_openrouter_models = [
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-chat",
+        "anthropic/claude-3.5-haiku",
+        "meta-llama/llama-3.3-70b-instruct",
+        "deepseek/deepseek-r1",
         "qwen/qwen-2.5-coder-32b-instruct:free",
-        "meta-llama/llama-3.2-1b-instruct:free"
+        "meta-llama/llama-3.2-1b-instruct:free",
     ]
-    models_to_try = ([model] if model else []) + [m for m in default_free_models if m != model]
+    models_to_try = ([model] if model and model != "auto" else []) + [m for m in default_openrouter_models if m != model]
 
     last_err = None
     for m in models_to_try:
@@ -82,6 +87,7 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
                     {"role": "user", "content": contents}
                 ],
                 "temperature": 0.2,
+                "max_tokens": 2048,
             }
             if response_format:
                 payload["response_format"] = response_format
@@ -95,25 +101,28 @@ def _call_openrouter(contents: str, model: Optional[str] = None, response_format
                     "X-Title": os.getenv("OPENROUTER_APP_NAME", "AgentForge"),
                 },
                 json=payload,
-                timeout=20,
+                timeout=30,
             )
             if response.status_code == 200:
                 data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+                choices = data.get("choices", [])
+                if choices and choices[0].get("message"):
+                    res_text = (choices[0]["message"].get("content") or "").strip()
+                    if res_text:
+                        print(f"[INFO] OpenRouter successfully generated text using model '{m}'")
+                        return res_text
             else:
-                err_msg = f"HTTP {response.status_code}: {response.text[:100]}"
-                last_err = RuntimeError(f"OpenRouter {err_msg}")
+                err_msg = f"HTTP {response.status_code}: {response.text[:120]}"
+                print(f"[WARN] OpenRouter model '{m}' returned error: {err_msg}")
+                last_err = RuntimeError(f"OpenRouter '{m}': {err_msg}")
         except Exception as exc:
             last_err = exc
+            print(f"[WARN] OpenRouter model '{m}' exception: {exc}")
             continue
 
     if last_err:
         raise last_err
-    raise RuntimeError("All OpenRouter model fallbacks failed")
-
-    if last_err:
-        raise last_err
-    raise RuntimeError("All OpenRouter model fallbacks failed")
+    raise RuntimeError("All OpenRouter models failed to respond")
 
 
 def _normalize_text(text: str) -> str:
@@ -199,40 +208,18 @@ def generate_text_with_fallback(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "deepseek/deepseek-r1:free",
+    openrouter_model: str = "openai/gpt-4o-mini",
 ) -> str:
-    """Generate text with Gemini first, then OpenRouter as a fallback."""
-    try:
-        return _call_gemini(contents, config=config)
-    except Exception as gemini_error:
-        print(f"[WARN] Gemini failed, using OpenRouter fallback: {gemini_error}")
-
-    try:
-        return _call_openrouter(contents, model=openrouter_model, response_format=response_format)
-    except Exception as openrouter_error:
-        raise RuntimeError(f"Both Gemini and OpenRouter failed: {openrouter_error}") from openrouter_error
+    """Generate text exclusively using OpenRouter API."""
+    return _call_openrouter(contents, model=openrouter_model, response_format=response_format)
 
 
 def generate_text_pro(
     contents: str,
     config: Any = None,
     response_format: Optional[Dict[str, Any]] = None,
-    openrouter_model: str = "deepseek/deepseek-r1:free",
+    openrouter_model: str = "openai/gpt-4o-mini",
     mode: str = "code",
 ) -> str:
-    """Fast, responsive LLM provider trying Gemini 2.0 Flash first, falling back to OpenRouter on failure."""
-    if _get_gemini_client():
-        try:
-            res = _call_gemini(contents, config=config)
-            if res and res.strip():
-                return res
-        except Exception as exc:
-            print(f"[WARN] Gemini primary call failed: {exc}")
-
-    if _get_openrouter_key():
-        try:
-            return _call_openrouter(contents, model=openrouter_model, response_format=response_format)
-        except Exception as exc:
-            print(f"[WARN] OpenRouter fallback failed: {exc}")
-
-    raise RuntimeError("No valid output from Gemini or OpenRouter LLM providers")
+    """Fast, responsive LLM provider routing exclusively through OpenRouter API."""
+    return _call_openrouter(contents, model=openrouter_model, response_format=response_format)

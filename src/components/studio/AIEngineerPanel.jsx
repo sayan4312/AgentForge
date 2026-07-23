@@ -28,18 +28,17 @@ export default function AIEngineerPanel({
   const chatEndRef = useRef(null);
   const hasInitializedRef = useRef(false);
 
-  // Initialize chatbot conversation cleanly ONCE on load with instant greeting
+  // Initialize chatbot conversation cleanly ONCE on load
   useEffect(() => {
-    if (messages && messages.length === 0) {
-      setMessages([
-        {
-          sender: 'ai',
-          text: `Hello! I am your Senior AI Architect. I'm ready to design your custom agent for "${prompt || 'Custom AI Agent'}". What specific features, APIs, or data sources would you like to integrate?`,
-          time: 'Just now'
-        }
-      ]);
+    if (messages && messages.length > 0) {
+      hasInitializedRef.current = true;
+      return;
     }
-  }, [prompt]);
+    if (prompt && !hasInitializedRef.current && messages.length === 0) {
+      hasInitializedRef.current = true;
+      fetchArchitectChat(prompt, []);
+    }
+  }, [prompt, messages]);
 
   // Scroll chat to bottom on new message
   useEffect(() => {
@@ -159,17 +158,43 @@ export default function AIEngineerPanel({
             <div
               style={{
                 maxWidth: '85%',
-                padding: '0.6rem 0.85rem',
+                padding: '0.65rem 0.9rem',
                 borderRadius: msg.sender === 'user' ? '10px 10px 2px 10px' : '10px 10px 10px 2px',
-                fontSize: '0.75rem',
-                lineHeight: '1.5',
-                background: msg.sender === 'user' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 22, 35, 0.75)',
+                fontSize: '0.78rem',
+                lineHeight: '1.6',
+                background: msg.sender === 'user' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 22, 35, 0.85)',
                 border: '1px solid rgba(255, 255, 255, 0.08)',
                 color: 'var(--text-primary)',
-                whiteSpace: 'pre-line'
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
               }}
             >
-              {msg.text}
+              {msg.text.split('\n').map((line, lIdx) => {
+                // Parse bold text **bold**
+                const parts = line.split(/(\*\*.*?\*\*)/g);
+                const formattedLine = parts.map((part, pIdx) => {
+                  if (part.startsWith('**') && part.endsWith('**')) {
+                    return <strong key={pIdx} style={{ color: '#ffffff', fontWeight: 700 }}>{part.slice(2, -2)}</strong>;
+                  }
+                  return part;
+                });
+
+                // Format bullet points
+                if (line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*')) {
+                  return (
+                    <div key={lIdx} style={{ display: 'flex', gap: '0.4rem', marginTop: '0.25rem', marginBottom: '0.25rem' }}>
+                      <span style={{ color: '#6366f1', fontWeight: 'bold' }}>•</span>
+                      <span style={{ flex: 1 }}>{formattedLine}</span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={lIdx} style={{ minHeight: line.trim() === '' ? '0.4rem' : 'auto' }}>
+                    {formattedLine}
+                  </div>
+                );
+              })}
             </div>
 
             {msg.sender === 'user' && (
